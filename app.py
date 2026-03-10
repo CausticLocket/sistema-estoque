@@ -48,26 +48,41 @@ def atualizar_entradas_antigas():
 def criar_tabelas():
     conn = conectar_bd()
     cursor = conn.cursor()
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS produtos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        codigo TEXT UNIQUE, nome TEXT, compra REAL, venda REAL,
-        estoque INTEGER, minimo INTEGER)''')
+        id SERIAL PRIMARY KEY,
+        codigo TEXT UNIQUE,
+        nome TEXT,
+        compra REAL,
+        venda REAL,
+        estoque INTEGER,
+        minimo INTEGER
+    )''')
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS historico_entradas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        data TEXT, nf TEXT, codigo TEXT, nome TEXT, quantidade INTEGER)''')
+        id SERIAL PRIMARY KEY,
+        data TEXT,
+        nf TEXT,
+        codigo TEXT,
+        nome TEXT,
+        quantidade INTEGER,
+        valor_unitario REAL DEFAULT 0,
+        valor_total REAL DEFAULT 0
+    )''')
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS historico_vendas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        data TEXT, cliente TEXT, cpf TEXT, endereco TEXT,
-        pagamento TEXT, parcelas INTEGER, total REAL,
-        itens_json TEXT, obs TEXT)''')
-    cursor.execute("PRAGMA table_info(historico_entradas)")
-    colunas = [c[1] for c in cursor.fetchall()]
+        id SERIAL PRIMARY KEY,
+        data TEXT,
+        cliente TEXT,
+        cpf TEXT,
+        endereco TEXT,
+        pagamento TEXT,
+        parcelas INTEGER,
+        total REAL,
+        itens_json TEXT,
+        obs TEXT
+    )''')
 
-    if "valor_unitario" not in colunas:
-        cursor.execute("ALTER TABLE historico_entradas ADD COLUMN valor_unitario REAL DEFAULT 0")
-
-    if "valor_total" not in colunas:
-        cursor.execute("ALTER TABLE historico_entradas ADD COLUMN valor_total REAL DEFAULT 0")
     conn.commit()
     conn.close()
 
