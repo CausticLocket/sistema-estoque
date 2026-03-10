@@ -1,5 +1,5 @@
 import json
-import sqlite3
+import psycopg2
 import os
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify
@@ -8,14 +8,9 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# CONFIGURAÇÃO DE CAMINHO
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "estoque.db")
-
 # Conectar ao banco
 def conectar_bd():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
     return conn
 
 def atualizar_entradas_antigas():
