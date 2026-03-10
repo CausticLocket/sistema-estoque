@@ -120,44 +120,6 @@ def cadastrar():
         return jsonify({"status":"erro","mensagem":str(e)}),500
 
 
-@app.route("/registrar-entrada",methods=["POST"])
-def registrar_entrada():
-
-    d=request.json
-
-    prod=query(
-        "SELECT compra FROM produtos WHERE codigo=%s",
-        (d["codigo"],),
-        fetch=True
-    )
-
-    valor_unit=prod[0]["compra"] if prod else 0
-    valor_total=valor_unit*int(d["quantidade"])
-
-    data=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    query(
-        "UPDATE produtos SET estoque=estoque+%s WHERE codigo=%s",
-        (d["quantidade"],d["codigo"])
-    )
-
-    query("""
-    INSERT INTO historico_entradas
-    (data,nf,codigo,nome,quantidade,valor_unitario,valor_total)
-    VALUES(%s,%s,%s,%s,%s,%s,%s)
-    """,(
-        data,
-        d["nf"],
-        d["codigo"],
-        d["nome"],
-        d["quantidade"],
-        valor_unit,
-        valor_total
-    ))
-
-    return jsonify({"status":"sucesso"})
-
-
 @app.route("/vender",methods=["POST"])
 def vender():
 
