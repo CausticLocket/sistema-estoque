@@ -194,17 +194,34 @@ def vender():
 @app.route("/historico-vendas")
 def historico_vendas():
 
-    rows=query(
+    rows = query(
         "SELECT * FROM historico_vendas ORDER BY id DESC",
         fetch=True
     )
 
+    vendas = []
+
     for r in rows:
 
-        r["itens"]=json.loads(r["itens_json"]) if r["itens_json"] else []
+        try:
+            itens = json.loads(r["itens_json"]) if r["itens_json"] else []
+        except:
+            itens = []
 
-    return jsonify(rows)
+        vendas.append({
+            "id": r["id"],
+            "data": r["data"],
+            "cliente": r["cliente"],
+            "total": float(r["total"]),
+            "itens": itens,
+            "cpf": r["cpf"],
+            "endereco": r["endereco"],
+            "pagamento": r["pagamento"],
+            "parcelas": r["parcelas"],
+            "obs": r["obs"]
+        })
 
+    return jsonify(vendas)
 
 @app.route("/historico-entradas")
 def historico_entradas():
@@ -215,6 +232,63 @@ def historico_entradas():
     )
 
     return jsonify(rows)
+
+@app.route("/registrar-entrada", methods=["POST"])
+def registrar_entrada():
+
+    d = request.json
+
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    try:
+
+        data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # buscar preço de compra
+        cursor.execute(
+            "SELECT compra FROM produtos WHERE codigo=%s",
+            (d["codigo"],)
+        )
+
+        prod = cursor.fetchone()
+
+        valor_unit = prod[0] if prod else 0
+        valor_total = valor_unit * int(d["quantidade"])
+
+        # atualizar estoque
+        cursor.execute(
+            "UPDATE produtos SET estoque = estoque + %s WHERE codigo = %s",
+            (d["quantidade"], d["codigo"])
+        )
+
+        # salvar histórico
+        cursor.execute("""
+            INSERT INTO historico_entradas
+            (data, nf, codigo, nome, quantidade, valor_unitario, valor_total)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            data_atual,
+            d["nf"],
+            d["codigo"],
+            d["nome"],
+            d["quantidade"],
+            valor_unit,
+            valor_total
+        ))
+
+        conn.commit()
+
+        return jsonify({"status":"sucesso"})
+
+    except Exception as e:
+
+        return jsonify({"status":"erro","mensagem":str(e)}),500
+
+    finally:
+
+        cursor.close()
+        conn.close()
 
 
 @app.route("/deletar/<codigo>",methods=["DELETE"])
