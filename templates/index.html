@@ -1633,7 +1633,7 @@ async function carregarTodasVendas(){
     const lista = document.getElementById("listaTodasVendas");
     lista.innerHTML = "";
 
-    dados.vendas.forEach(v => {
+    dados.forEach(v => {
         lista.innerHTML += `
             <div style="border:1px solid #ccc; padding:10px; margin:5px;">
                 <b>ID:</b> ${v.id}<br>
