@@ -208,6 +208,28 @@ def vender():
 
     return jsonify({"status":"sucesso"})
 
+@app.route('/historico-entradas', methods=['GET'])
+def hist_entradas():
+
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM historico_entradas
+        ORDER BY id DESC
+    """)
+
+    rows = cursor.fetchall()
+
+    colunas = [desc[0] for desc in cursor.description]
+
+    dados = [dict(zip(colunas, row)) for row in rows]
+
+    cursor.close()
+    conn.close()
+
+    return jsonify(dados)
 
 # historico vendas paginado
 @app.route("/historico-vendas")
@@ -260,7 +282,81 @@ def historico_vendas():
         "limite":limite
     })
 
+@app.route("/kpis-dashboard")
+def kpis_dashboard():
 
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    mes_atual = datetime.now().strftime("%Y-%m")
+
+    # faturamento mensal
+    cursor.execute("""
+        SELECT COALESCE(SUM(total),0)
+        FROM historico_vendas
+        WHERE substr(data,1,7)=%s
+    """, (mes_atual,))
+    faturamento = cursor.fetchone()[0]
+
+    # total de vendas
+    cursor.execute("""
+        SELECT COUNT(*)
+        FROM historico_vendas
+        WHERE substr(data,1,7)=%s
+    """, (mes_atual,))
+    total_vendas = cursor.fetchone()[0]
+
+    ticket_medio = round(faturamento / total_vendas, 2) if total_vendas else 0
+
+    # margem média
+    cursor.execute("""
+        SELECT itens_json
+        FROM historico_vendas
+        WHERE substr(data,1,7)=%s
+    """, (mes_atual,))
+    vendas = cursor.fetchall()
+
+    margem_total = 0
+    qtd_total = 0
+
+    for v in vendas:
+
+        itens = json.loads(v[0]) if v[0] else []
+
+        for item in itens:
+
+            codigo = item["codigo"]
+            qtd = item["qtd"]
+
+            cursor.execute("""
+                SELECT compra, venda
+                FROM produtos
+                WHERE codigo=%s
+            """, (codigo,))
+
+            prod = cursor.fetchone()
+
+            if prod and prod[1] > 0:
+
+                compra = prod[0]
+                venda = prod[1]
+
+                margem_item = (venda - compra) / venda * 100
+                margem_total += margem_item * qtd
+                qtd_total += qtd
+
+    margem_media = round(margem_total / qtd_total, 2) if qtd_total else 0
+
+    cursor.close()
+    conn.close()
+
+    return jsonify({
+        "faturamento": round(float(faturamento),2),
+        "total_vendas": total_vendas,
+        "ticket_medio": ticket_medio,
+        "margem_media": margem_media
+    })
+    
 # cancelar venda
 @app.route("/cancelar-venda/<int:venda_id>", methods=["DELETE"])
 def cancelar_venda(venda_id):
