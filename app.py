@@ -8,17 +8,13 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-from psycopg2 import pool
 
-db_pool = pool.SimpleConnectionPool(
-    1,
-    10,
-    os.environ["DATABASE_URL"]
-)
-
+# conexão banco
 def conectar_bd():
-    return db_pool.getconn()
+    return psycopg2.connect(os.environ["DATABASE_URL"])
 
+
+# utilitário query
 def query(sql, params=None, fetch=False):
 
     conn = conectar_bd()
@@ -27,19 +23,19 @@ def query(sql, params=None, fetch=False):
     cursor.execute(sql, params or ())
 
     if fetch:
-        colunas = [desc[0] for desc in cursor.description]
+        colunas = [d[0] for d in cursor.description]
         dados = [dict(zip(colunas,row)) for row in cursor.fetchall()]
     else:
         dados = None
 
     conn.commit()
-
     cursor.close()
-    db_pool.putconn(conn)
+    conn.close()
 
     return dados
 
 
+# criar tabelas
 def criar_tabelas():
 
     query("""
@@ -62,8 +58,8 @@ def criar_tabelas():
         codigo TEXT,
         nome TEXT,
         quantidade INTEGER,
-        valor_unitario NUMERIC,
-        valor_total NUMERIC
+        valor_unitario NUMERIC DEFAULT 0,
+        valor_total NUMERIC DEFAULT 0
     )
     """)
 
@@ -90,66 +86,112 @@ def index():
     return render_template("index.html")
 
 
+# produtos
 @app.route("/produtos")
 def produtos():
 
     rows = query("SELECT * FROM produtos ORDER BY nome", fetch=True)
-
     return jsonify(rows)
 
 
+# cadastrar produto
 @app.route("/cadastrar", methods=["POST"])
 def cadastrar():
 
     d = request.json
 
-    try:
+    query("""
+    INSERT INTO produtos(codigo,nome,compra,venda,estoque,minimo)
+    VALUES(%s,%s,%s,%s,%s,%s)
+    ON CONFLICT(codigo) DO UPDATE SET
+    nome=EXCLUDED.nome,
+    compra=EXCLUDED.compra,
+    venda=EXCLUDED.venda,
+    estoque=EXCLUDED.estoque,
+    minimo=EXCLUDED.minimo
+    """,(
+        d["codigo"],
+        d["nome"],
+        d["compra"],
+        d["venda"],
+        d["estoque"],
+        d["minimo"]
+    ))
 
-        query("""
-        INSERT INTO produtos(codigo,nome,compra,venda,estoque,minimo)
-        VALUES(%s,%s,%s,%s,%s,%s)
-        ON CONFLICT(codigo) DO UPDATE SET
-        nome=EXCLUDED.nome,
-        compra=EXCLUDED.compra,
-        venda=EXCLUDED.venda,
-        estoque=EXCLUDED.estoque,
-        minimo=EXCLUDED.minimo
-        """,(
-            d.get("codigo"),
-            d.get("nome"),
-            d.get("compra"),
-            d.get("venda"),
-            d.get("estoque"),
-            d.get("minimo")
-        ))
-
-        return jsonify({"status":"sucesso"})
-
-    except Exception as e:
-
-        return jsonify({"status":"erro","mensagem":str(e)}),500
+    return jsonify({"status":"sucesso"})
 
 
-@app.route("/vender",methods=["POST"])
+# registrar entrada
+@app.route("/registrar-entrada", methods=["POST"])
+def registrar_entrada():
+
+    d = request.json
+
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute(
+        "SELECT compra FROM produtos WHERE codigo=%s",
+        (d["codigo"],)
+    )
+
+    prod = cursor.fetchone()
+
+    valor_unit = prod[0] if prod else 0
+    valor_total = valor_unit * int(d["quantidade"])
+
+    cursor.execute(
+        "UPDATE produtos SET estoque=estoque+%s WHERE codigo=%s",
+        (d["quantidade"],d["codigo"])
+    )
+
+    cursor.execute("""
+    INSERT INTO historico_entradas
+    (data,nf,codigo,nome,quantidade,valor_unitario,valor_total)
+    VALUES(%s,%s,%s,%s,%s,%s,%s)
+    """,(
+        data_atual,
+        d["nf"],
+        d["codigo"],
+        d["nome"],
+        d["quantidade"],
+        valor_unit,
+        valor_total
+    ))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({"status":"sucesso"})
+
+
+# vender
+@app.route("/vender", methods=["POST"])
 def vender():
 
-    d=request.json
+    d = request.json
 
-    data=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for item in d["itens"]:
 
-        query(
+        cursor.execute(
             "UPDATE produtos SET estoque=estoque-%s WHERE codigo=%s",
             (item["qtd"],item["codigo"])
         )
 
-    query("""
+    cursor.execute("""
     INSERT INTO historico_vendas
     (data,cliente,total,itens_json,cpf,endereco,pagamento,parcelas,obs)
     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """,(
-        data,
+        data_atual,
         d.get("cliente","Consumidor"),
         d["total"],
         json.dumps(d["itens"]),
@@ -160,122 +202,109 @@ def vender():
         d.get("obs","")
     ))
 
+    conn.commit()
+    cursor.close()
+    conn.close()
+
     return jsonify({"status":"sucesso"})
 
 
+# historico vendas paginado
 @app.route("/historico-vendas")
 def historico_vendas():
 
-    rows = query(
-        "SELECT * FROM historico_vendas ORDER BY id DESC",
-        fetch=True
-    )
+    pagina = int(request.args.get("pagina",1))
+    limite = int(request.args.get("limite",10))
 
-    vendas = []
-
-    for r in rows:
-
-        try:
-            itens = json.loads(r["itens_json"]) if r["itens_json"] else []
-        except:
-            itens = []
-
-        vendas.append({
-            "id": r["id"],
-            "data": r["data"],
-            "cliente": r["cliente"],
-            "total": float(r["total"]),
-            "itens": itens,
-            "cpf": r["cpf"],
-            "endereco": r["endereco"],
-            "pagamento": r["pagamento"],
-            "parcelas": r["parcelas"],
-            "obs": r["obs"]
-        })
-
-    return jsonify(vendas)
-
-@app.route("/historico-entradas")
-def historico_entradas():
-
-    rows=query(
-        "SELECT * FROM historico_entradas ORDER BY id DESC",
-        fetch=True
-    )
-
-    return jsonify(rows)
-
-@app.route("/registrar-entrada", methods=["POST"])
-def registrar_entrada():
-
-    d = request.json
+    offset = (pagina-1)*limite
 
     conn = conectar_bd()
     cursor = conn.cursor()
 
-    try:
+    cursor.execute("SELECT COUNT(*) FROM historico_vendas")
+    total = cursor.fetchone()[0]
 
-        data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("""
+    SELECT *
+    FROM historico_vendas
+    ORDER BY id DESC
+    LIMIT %s OFFSET %s
+    """,(limite,offset))
 
-        # buscar preço de compra
+    rows = cursor.fetchall()
+
+    colunas=[d[0] for d in cursor.description]
+
+    vendas=[]
+
+    for r in rows:
+
+        venda=dict(zip(colunas,r))
+
+        try:
+            itens=json.loads(venda["itens_json"]) if venda["itens_json"] else []
+        except:
+            itens=[]
+
+        venda["itens"]=itens
+
+        vendas.append(venda)
+
+    cursor.close()
+    conn.close()
+
+    return jsonify({
+        "vendas":vendas,
+        "total":total,
+        "pagina":pagina,
+        "limite":limite
+    })
+
+
+# cancelar venda
+@app.route("/cancelar-venda/<int:venda_id>", methods=["DELETE"])
+def cancelar_venda(venda_id):
+
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT itens_json FROM historico_vendas WHERE id=%s",
+        (venda_id,)
+    )
+
+    venda=cursor.fetchone()
+
+    if not venda:
+        return jsonify({"erro":"Venda não encontrada"}),404
+
+    itens=json.loads(venda[0]) if venda[0] else []
+
+    for item in itens:
+
         cursor.execute(
-            "SELECT compra FROM produtos WHERE codigo=%s",
-            (d["codigo"],)
+            "UPDATE produtos SET estoque=estoque+%s WHERE codigo=%s",
+            (item["qtd"],item["codigo"])
         )
 
-        prod = cursor.fetchone()
+    cursor.execute(
+        "DELETE FROM historico_vendas WHERE id=%s",
+        (venda_id,)
+    )
 
-        valor_unit = prod[0] if prod else 0
-        valor_total = valor_unit * int(d["quantidade"])
+    conn.commit()
+    cursor.close()
+    conn.close()
 
-        # atualizar estoque
-        cursor.execute(
-            "UPDATE produtos SET estoque = estoque + %s WHERE codigo = %s",
-            (d["quantidade"], d["codigo"])
-        )
-
-        # salvar histórico
-        cursor.execute("""
-            INSERT INTO historico_entradas
-            (data, nf, codigo, nome, quantidade, valor_unitario, valor_total)
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
-        """, (
-            data_atual,
-            d["nf"],
-            d["codigo"],
-            d["nome"],
-            d["quantidade"],
-            valor_unit,
-            valor_total
-        ))
-
-        conn.commit()
-
-        return jsonify({"status":"sucesso"})
-
-    except Exception as e:
-
-        return jsonify({"status":"erro","mensagem":str(e)}),500
-
-    finally:
-
-        cursor.close()
-        conn.close()
+    return jsonify({"status":"cancelada"})
 
 
-@app.route("/deletar/<codigo>",methods=["DELETE"])
-def deletar(codigo):
-
-    query("DELETE FROM produtos WHERE codigo=%s",(codigo,))
-
-    return jsonify({"status":"sucesso"})
-
-
+# faturamento mensal
 @app.route("/faturamento-mensal")
 def faturamento():
 
     rows=query("""
-    SELECT LEFT(data,7) mes,
+    SELECT substr(data,1,7) mes,
     SUM(total) total
     FROM historico_vendas
     GROUP BY mes
@@ -285,6 +314,7 @@ def faturamento():
     return jsonify(rows)
 
 
+# produtos mais vendidos
 @app.route("/produtos-mais-vendidos")
 def mais_vendidos():
 
@@ -308,6 +338,15 @@ def mais_vendidos():
         "labels":[d[0] for d in dados],
         "valores":[d[1] for d in dados]
     })
+
+
+# deletar produto
+@app.route("/deletar/<codigo>",methods=["DELETE"])
+def deletar(codigo):
+
+    query("DELETE FROM produtos WHERE codigo=%s",(codigo,))
+
+    return jsonify({"status":"sucesso"})
 
 
 if __name__=="__main__":
