@@ -330,6 +330,57 @@ def vendas_mes():
 
     return jsonify(lista)
 
+@app.route("/comparativo-mensal")
+def comparativo_mensal():
+
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    ano = datetime.now().year
+
+    meses = [f"{ano}-{m:02d}" for m in range(1,13)]
+    labels = [datetime.strptime(m,"%Y-%m").strftime("%b") for m in meses]
+
+    vendas_db = {m:0 for m in meses}
+    compras_db = {m:0 for m in meses}
+
+    # VENDAS
+    cursor.execute("""
+        SELECT to_char(data::date,'YYYY-MM') as mes, SUM(total)
+        FROM historico_vendas
+        GROUP BY mes
+    """)
+
+    for row in cursor.fetchall():
+        mes = row[0]
+        valor = float(row[1] or 0)
+
+        if mes in vendas_db:
+            vendas_db[mes] = valor
+
+    # COMPRAS
+    cursor.execute("""
+        SELECT to_char(data::date,'YYYY-MM') as mes, SUM(valor_total)
+        FROM historico_entradas
+        GROUP BY mes
+    """)
+
+    for row in cursor.fetchall():
+        mes = row[0]
+        valor = float(row[1] or 0)
+
+        if mes in compras_db:
+            compras_db[mes] = valor
+
+    cursor.close()
+    conn.close()
+
+    return jsonify({
+        "labels": labels,
+        "vendas": [vendas_db[m] for m in meses],
+        "compras": [compras_db[m] for m in meses]
+    })
+
 @app.route("/kpis-dashboard")
 def kpis_dashboard():
 
@@ -404,6 +455,27 @@ def kpis_dashboard():
         "ticket_medio": ticket_medio,
         "margem_media": margem_media
     })
+
+
+@app.route("/editar/<codigo>", methods=["PUT"])
+def editar(codigo):
+
+    d = request.json
+
+    query("""
+    UPDATE produtos
+    SET nome=%s, compra=%s, venda=%s, estoque=%s, minimo=%s
+    WHERE codigo=%s
+    """,(
+        d["nome"],
+        d["compra"],
+        d["venda"],
+        d["estoque"],
+        d["minimo"],
+        codigo
+    ))
+
+    return jsonify({"status":"sucesso"})
     
 # cancelar venda
 @app.route("/cancelar-venda/<int:venda_id>", methods=["DELETE"])
@@ -442,6 +514,88 @@ def cancelar_venda(venda_id):
 
     return jsonify({"status":"cancelada"})
 
+@app.route("/formas-pagamento")
+def formas_pagamento():
+
+    rows = query("""
+    SELECT pagamento, COUNT(*) as total
+    FROM historico_vendas
+    GROUP BY pagamento
+    """, fetch=True)
+
+    return jsonify({
+        "labels":[r["pagamento"] for r in rows],
+        "valores":[r["total"] for r in rows]
+    })
+
+@app.route("/top-produtos")
+def top_produtos():
+
+    rows = query("SELECT itens_json FROM historico_vendas", fetch=True)
+
+    ranking = {}
+
+    for r in rows:
+
+        itens = json.loads(r["itens_json"]) if r["itens_json"] else []
+
+        for item in itens:
+
+            cod = item["codigo"]
+            ranking[cod] = ranking.get(cod,0) + item["qtd"]
+
+    top = sorted(ranking.items(), key=lambda x:x[1], reverse=True)[:5]
+
+    return jsonify({
+        "labels":[t[0] for t in top],
+        "valores":[t[1] for t in top]
+    })
+
+@app.route("/compras-vs-vendas")
+def compras_vs_vendas():
+
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT to_char(data::date,'YYYY-MM') mes, SUM(total)
+    FROM historico_vendas
+    GROUP BY mes
+    """)
+
+    vendas_db = {r[0]:float(r[1]) for r in cursor.fetchall()}
+
+    cursor.execute("""
+    SELECT to_char(data::date,'YYYY-MM') mes, SUM(valor_total)
+    FROM historico_entradas
+    GROUP BY mes
+    """)
+
+    compras_db = {r[0]:float(r[1]) for r in cursor.fetchall()}
+
+    cursor.close()
+    conn.close()
+
+    ano = datetime.now().year
+
+    labels=[]
+    vendas=[]
+    compras=[]
+
+    for m in range(1,13):
+
+        chave=f"{ano}-{m:02d}"
+
+        labels.append(datetime.strptime(chave,"%Y-%m").strftime("%b"))
+
+        vendas.append(vendas_db.get(chave,0))
+        compras.append(compras_db.get(chave,0))
+
+    return jsonify({
+        "labels":labels,
+        "vendas":vendas,
+        "compras":compras
+    })
 
 # faturamento mensal
 @app.route("/faturamento-mensal")
@@ -483,6 +637,59 @@ def mais_vendidos():
         "valores":[d[1] for d in dados]
     })
 
+@app.route("/lucro-mensal")
+def lucro_mensal():
+
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT data,itens_json FROM historico_vendas")
+
+    vendas = cursor.fetchall()
+
+    lucro_db = {}
+
+    for v in vendas:
+
+        data = v[0]
+        itens_json = v[1]
+
+        mes = data[:7]
+
+        if mes not in lucro_db:
+            lucro_db[mes] = 0
+
+        itens = json.loads(itens_json) if itens_json else []
+
+        for item in itens:
+
+            cursor.execute("""
+            SELECT compra,venda
+            FROM produtos
+            WHERE codigo=%s
+            """,(item["codigo"],))
+
+            prod = cursor.fetchone()
+
+            if prod:
+
+                compra = prod[0]
+                venda = prod[1]
+
+                lucro_db[mes] += (venda-compra) * item["qtd"]
+
+    cursor.close()
+    conn.close()
+
+    meses = sorted(lucro_db.keys())
+
+    labels=[datetime.strptime(m,"%Y-%m").strftime("%b") for m in meses]
+    valores=[lucro_db[m] for m in meses]
+
+    return jsonify({
+        "labels":labels,
+        "valores":valores
+    })
 
 # deletar produto
 @app.route("/deletar/<codigo>",methods=["DELETE"])
@@ -492,6 +699,20 @@ def deletar(codigo):
 
     return jsonify({"status":"sucesso"})
 
+@app.route("/graficos")
+def pagina_graficos():
+    return render_template("graficos.html")
+
+@app.route("/debug-entradas")
+def debug_entradas():
+
+    rows = query("""
+    SELECT data,codigo,nome,quantidade,valor_unitario,valor_total
+    FROM historico_entradas
+    ORDER BY data DESC
+    """, fetch=True)
+
+    return jsonify(rows)
 
 if __name__=="__main__":
 
