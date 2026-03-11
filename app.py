@@ -282,6 +282,54 @@ def historico_vendas():
         "limite":limite
     })
 
+@app.route("/vendas-mes")
+def vendas_mes():
+
+    conn = conectar_bd()
+    cursor = conn.cursor()
+
+    mes = datetime.now().strftime("%Y-%m")
+
+    cursor.execute("""
+        SELECT id, data, cliente, total, itens_json, cpf, endereco, pagamento, parcelas, obs
+        FROM historico_vendas
+        WHERE to_char(data::date,'YYYY-MM') = %s
+        ORDER BY id DESC
+    """, (mes,))
+
+    rows = cursor.fetchall()
+
+    colunas = [desc[0] for desc in cursor.description]
+
+    lista = []
+
+    for row in rows:
+
+        r = dict(zip(colunas, row))
+
+        try:
+            itens = json.loads(r["itens_json"]) if r["itens_json"] else []
+        except:
+            itens = []
+
+        lista.append({
+            "id": r["id"],
+            "data": r["data"],
+            "cliente": r["cliente"],
+            "total": float(r["total"]),
+            "itens": itens,
+            "cpf": r["cpf"],
+            "endereco": r["endereco"],
+            "pagamento": r["pagamento"],
+            "parcelas": r["parcelas"],
+            "obs": r["obs"]
+        })
+
+    cursor.close()
+    conn.close()
+
+    return jsonify(lista)
+
 @app.route("/kpis-dashboard")
 def kpis_dashboard():
 
