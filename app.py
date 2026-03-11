@@ -8,10 +8,19 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
+from psycopg2 import pool
+
+db_pool = pool.SimpleConnectionPool(
+    1,
+    10,
+    os.environ["DATABASE_URL"]
+)
+
 def conectar_bd():
-    return psycopg2.connect(os.environ["DATABASE_URL"])
+    return db_pool.getconn()
 
 def query(sql, params=None, fetch=False):
+
     conn = conectar_bd()
     cursor = conn.cursor()
 
@@ -24,8 +33,9 @@ def query(sql, params=None, fetch=False):
         dados = None
 
     conn.commit()
+
     cursor.close()
-    conn.close()
+    db_pool.putconn(conn)
 
     return dados
 
@@ -105,12 +115,12 @@ def cadastrar():
         estoque=EXCLUDED.estoque,
         minimo=EXCLUDED.minimo
         """,(
-            d["codigo"],
-            d["nome"],
-            d["compra"],
-            d["venda"],
-            d["estoque"],
-            d["minimo"]
+            d.get("codigo"),
+            d.get("nome"),
+            d.get("compra"),
+            d.get("venda"),
+            d.get("estoque"),
+            d.get("minimo")
         ))
 
         return jsonify({"status":"sucesso"})
@@ -265,7 +275,7 @@ def deletar(codigo):
 def faturamento():
 
     rows=query("""
-    SELECT substr(data,1,7) mes,
+    SELECT LEFT(data,7) mes,
     SUM(total) total
     FROM historico_vendas
     GROUP BY mes
